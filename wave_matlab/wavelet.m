@@ -90,10 +90,15 @@
 %  Boulder, CO 80301, USA                 Boulder, CO 80305-3328, USA
 %  E-mail: chris[AT]rsinc[DOT]com         E-mail: compo[AT]colorado[DOT]edu
 %----------------------------------------------------------------------------
-function [wave,period,scale,coi] = ...
-	wavelet(Y,dt,pad,dj,s0,J1,mother,param);
+%
+% Updates
+%       ccox 10/15/12: add wavelet reconstruction capabilities
+%
 
-if (nargin < 8), param = -1;, end
+function [wave,period,scale,coi,X,S] = ...
+	wavelet(Y,dt,pad,dj,s0,J1,mother,upsilon,Cdelta,noCheck,cosdamp,param);
+
+if (nargin < 12), param = -1;, end
 if (nargin < 7), mother = -1;, end
 if (nargin < 6), J1 = -1;, end
 if (nargin < 5), s0 = -1;, end
@@ -111,12 +116,19 @@ if (J1 == -1), J1=fix((log(n1*dt/s0)/log(2))/dj);, end
 if (mother == -1), mother = 'MORLET';, end
 
 %....construct time series to analyze, pad if necessary
-x(1:n1) = Y - mean(Y);
-if (pad == 1)
-	base2 = fix(log(n1)/log(2) + 0.4999);   % power of 2 nearest to N
+x(1:n1) = Y - mean(Y); % this is redundant if already anomaly (same as: x(1:n1) = Y - 0)
+base2 = fix(log(n1)/log(2) + 0.4999);   % power of 2 nearest to N
+if (pad == 1) && (cosdamp == 0)
 	x = [x,zeros(1,2^(base2+1)-n1)];
+elseif (cosdamp == 1) && (pad == 0)
+    ks = fliplr(0:(2^(base2+1)-n1));
+    x = [x, x(end).*(1-( cos( ((ks-1).*pi)/((2^(base2+1)-n1)-1) ).^2 ))];
+elseif (cosdamp == 1) && (pad == 1)
+    error('You can''t cosine damp and pad!')
 end
+    
 n = length(x);
+
 
 %....construct wavenumber array used in transform [Eqn(5)]
 k = [1:fix(n/2)];
@@ -133,14 +145,29 @@ wave = zeros(J1+1,n);  % define the wavelet array
 wave = wave + i*wave;  % make it complex
 
 % loop through all scales and compute transform
+X = NaN(n,J1+1);
+S = NaN(n,J1+1);
 for a1 = 1:J1+1
-	[daughter,fourier_factor,coi,dofmin]=wave_bases(mother,k,scale(a1),param);	
+	[daughter,fourier_factor,coi,dofmin] = wave_bases(mother,k,scale(a1),param);
 	wave(a1,:) = ifft(f.*daughter);  % wavelet transform[Eqn(4)]
+    [X(:,a1) S(:,a1)] = waveletrecon(Cdelta,dj,dt,scale(a1),upsilon,wave(a1,1:n),n,1:n); % ccox 10/15/12
 end
+X1 = sum(X,2)                                  ; % sums in Eq. 11
+S1 = sum(S(:))                                 ; % sums in Eq. 14
+[R P rsq RMSE Res ME] = CorrStats(X1,x(1:n)') ; % report stats on Eq. 11
+
 
 period = fourier_factor*scale;
 coi = coi*dt*[1E-5,1:((n1+1)/2-1),fliplr((1:(n1/2-1))),1E-5];  % COI [Sec.3g]
 wave = wave(:,1:n1);  % get rid of padding before returning
+X1 = X1(1:n1);
+X = X(1:n1,:);
+if noCheck == 0
+    disp(['The Root Mean Squared Error from Eq.[11] is ',num2str(RMSE),' units.']);
+    disp(['The variance closure from Eq.[14] (1:N) is ',num2str((S1 ./ (var(x(1:n),1)))*100),'%.']);
+    disp(['The variance closure from Eq.[11] (1:n) is ',num2str(((var(X1)) ./ (var(x(1:n1),1)))*100),'%.']);
+    disp(['The variance from Eq.[14 (1:N) is ',num2str(S1)]);
+end
 
 return
 
